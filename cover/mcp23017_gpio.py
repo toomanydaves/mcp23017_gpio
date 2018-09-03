@@ -76,14 +76,23 @@ class MCP23017GPIOCover(CoverDevice):
     controlled by two GPIO pins of a MCP23017 chip driven from the I2C bus of a Raspberry Pi
     """
     def __init__(self, down_pin, up_pin, name):
+        down_pin_address = down_pin.get(CONF_ADDRESS)
+        down_pin_port = down_pin.get(CONF_PORT)
+        down_pin_index = down_pin.get(CONF_INDEX)
+        up_pin_address = up_pin.get(CONF_ADDRESS)
+        up_pin_port = up_pin.get(CONF_PORT)
+        up_pin_index = up_pin.get(CONF_INDEX)
+        
         self._down_pin = down_pin
         self._up_pin = up_pin
         self._name = name if not name == 'MCP23017' else (
-            str(hex(up_pin.get(CONF_ADDRESS))) + ':' + up_pin.get(CONF_PORT) + ':' + str(up_pin.get(CONF_INDEX))
+            str(hex(up_pin_address)) + ':' + up_pin_port + ':' + str(up_pin_index)
             + " | " +
-            
-            str(hex(down_pin.get(CONF_ADDRESS))) + ':' + down_pin.get(CONF_PORT) + ':' + str(down_pin.get(CONF_INDEX))
+            str(hex(down_pin_address)) + ':' + down_pin_port + ':' + str(down_pin_index)
         )
+
+        config_pin_as_output(down_pin_address, down_pin_port, down_pin_index)
+        config_pin_as_output(up_pin_address, up_pin_port, up_pin_index)
 
     @property
     def name(self):
