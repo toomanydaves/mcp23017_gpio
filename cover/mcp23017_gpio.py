@@ -6,59 +6,69 @@ To use this component, add the following to your configuration.yaml file:
   # Example configuration.yaml entry
   cover:
     - platform: mcp23017_gpio
-      name: Bedroom Blinds
-      down_pin:
-        address: 0x20
-        port: A
-        pin: 0
-        invert_logic: true
-      up_pin:
-        address: 0x24
-        port: B
-        pin: 7
+      covers:
+        - name: Bedroom Blinds
+          down_pin:
+            address: 0x20
+            port: A
+            index: 0
+            invert_logic: true
+          up_pin:
+            address: 0x24
+            port: B
+            index: 7
 ```
 Configuration Variables:
++ **name** (Optional): Name to use in the frontend.
 + **address** (Required): The address of the MCP23017 with the pin on the Pi's I2C bus, 0x00-0xff
 + **port** (Required): The port (A or B) with the pin on the MCP23017.
-+ **pin** (Required): The index of the pin on the port, 0-7.
++ **index** (Required): The index of the pin on the port, 0-7.
 + **invert_logic** (Optional): If true, inverts the output logic to ACTIVE LOW. Default is false (ACTIVE HIGH).
-+ **name** (Optional): Name to use in the frontend.
 """
 import logging
 import voluptuous as vol
 
-from homeassistant.components.cover import CoverDevice, PLATFORM_SCHEMA
 from custom_components.mcp23017_gpio import (
-    config_pin_as_output, set_pin_output_state, get_pin_output_state,
-    PIN_SCHEMA, CONF_ADDRESS, CONF_PORT, CONF_PIN)
+    PIN_SCHEMA, CONF_ADDRESS, CONF_PORT, CONF_INDEX, CONF_INVERT_LOGIC, CONF_NAME,
+    config_pin_as_output, set_pin_output_state, get_pin_config_state, get_pin_output_state)
 
+from homeassistant.components.cover import CoverDevice, PLATFORM_SCHEMA
 import homeassistant.helpers.config_validation as cv
-from homeassistant.const import CONF_NAME
-
-_LOGGER = logging.getLogger(__name__)
 
 DEPENDENCIES = ['mcp23017_gpio']
 
+_LOGGER = logging.getLogger(__name__)
+
+CONF_COVERS = 'covers'
 CONF_DOWN_PIN = 'down_pin'
 CONF_UP_PIN = 'up_pin'
-CONF_INVERT_LOGIC = 'invert_logic'
-
-PIN_SCHEMA = PIN_SCHEMA.extend({
-    vol.Optional(CONF_INVERT_LOGIC, default=False):cv.boolean
-})
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_DOWN_PIN): PIN_SCHEMA,
-    vol.Required(CONF_UP_PIN): PIN_SCHEMA
-    vol.Optional(CONF_NAME, default="MCP23017"): cv.string,
+    vol.Required(CONF_COVERS): vol.All(
+        cv.ensure_list,
+        [ vol.Schema({
+            vol.Required(CONF_UP_PIN): PIN_SCHEMA,
+            vol.Required(CONF_DOWN_PIN): PIN_SCHEMA,
+            vol.Optional(CONF_NAME, default='MCP23017'): cv.string,
+        }) ]
+    )
 })
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    add_devices(MCP23017GPIOCover(
-        down_pin=config.get(CONF_DOWN_PIN),
-        up_pin=config.get(CONF_UP_PIN),
-        name=config.get(CONF_NAME)
-    ))
+    covers = []
+
+    for cover in config.get(CONF_COVERS):
+        name=cover.get(CONF_NAME)
+        down_pin = dict(cover.get(CONF_DOWN_PIN))
+        up_pin = dict(cover.get(CONF_UP_PIN))
+
+        covers.append(MCP23017GPIOCover(
+            down_pin,
+            up_pin,
+            name
+        ))
+
+    add_devices(covers)
 
 class MCP23017GPIOCover(CoverDevice):
     """
@@ -67,8 +77,21 @@ class MCP23017GPIOCover(CoverDevice):
     """
     def __init__(self, down_pin, up_pin, name):
         self._down_pin = down_pin
-        self._up_pin = up_pin,
-        self._name = name
+        self._up_pin = up_pin
+        self._name = name if not name == 'MCP23017' else (
+            str(hex(up_pin.get(CONF_ADDRESS))) + ':' + up_pin.get(CONF_PORT) + ':' + str(up_pin.get(CONF_INDEX))
+            + " | " +
+            
+            str(hex(down_pin.get(CONF_ADDRESS))) + ':' + down_pin.get(CONF_PORT) + ':' + str(down_pin.get(CONF_INDEX))
+        )
+
+    @property
+    def name(self):
+        """
+        Return the name of the cover.
+        Default: [up_pin_address]:[up_pin_port]:[up_pin_index]|[down_pin_address]:[down_pin_port]:[down_pin_index]
+        """
+        return self._name
 
     @property
     def current_cover_position(self):
@@ -93,58 +116,66 @@ class MCP23017GPIOCover(CoverDevice):
         """"
         Return if the cover is opening or not
         """
-        return self._determine_state(
-            pin_state=get_pin_output_state(
-                address=self._down_pin.get(CONF_ADDRESS),
-                port=self._down_pin.get(CONF_PORT),
-                pin_index=self._down_pin.get(CONF_PIN)
-            ),
-            invert_logic=self._down_pin.get(CONF_INVERT_LOGIC)
+        # down_pin = dict(self._down_pin[0])
+
+        pin_state=get_pin_output_state(
+	    address=self._down_pin.get(CONF_ADDRESS),
+	    port=self._down_pin.get(CONF_PORT),
+	    index=self._down_pin.get(CONF_INDEX)
         )
+        invert_logic=self._down_pin.get(CONF_INVERT_LOGIC)
+
+        return self._determine_state(pin_state, invert_logic)
 
     @property
     def is_closing(self):
         """
         Return if the cover is closing or not
         """
-        return self._determine_state(
-            pin_state=get_pin_output_state(
-                address=self._up_pin.get(CONF_ADDRESS),
-                port=self._up_pin.get(CONF_PORT),
-                pin_index=self._up_pin.get(CONF_PIN)
-            ),
-            invert_logic=self._up_pin.get(CONF_INVERT_LOGIC)
+        # up_pin = dict(self._up_pin[0])
+
+        pin_state=get_pin_output_state(
+	    address=self._up_pin.get(CONF_ADDRESS),
+	    port=self._up_pin.get(CONF_PORT),
+	    index=self._up_pin.get(CONF_INDEX)
         )
+        invert_logic=self._up_pin.get(CONF_INVERT_LOGIC)
+            
+        return self._determine_state(pin_state, invert_logic)
 
     @property
     def is_closed(self):
         """
         Return if the cover is closed or not
         """
-        raise NotImplementedError()
+        return None
 
     def open_cover(self):
         """
         Open the cover.
         """
+        #up_pin = dict(self._up_pin[0])
+
         self.stop_cover()
         set_pin_output_state(
             False if self._up_pin.get(CONF_INVERT_LOGIC) else True,
             self._up_pin.get(CONF_ADDRESS), 
-            self._up_pin.get(PORT), 
-            self._up_pin.get(PIN) 
+            self._up_pin.get(CONF_PORT), 
+            self._up_pin.get(CONF_INDEX) 
         )
 
     def close_cover(self):
         """
         Close the cover.
         """
+        # down_pin = dict(self._down_pin[0])
+
         self.stop_cover()
         set_pin_output_state(
             False if self._down_pin.get(CONF_INVERT_LOGIC) else True,
             self._down_pin.get(CONF_ADDRESS), 
-            self._down_pin.get(PORT), 
-            self._down_pin.get(PIN) 
+            self._down_pin.get(CONF_PORT), 
+            self._down_pin.get(CONF_INDEX) 
         )
 
     def set_cover_position (self, **kwargs):
@@ -157,18 +188,20 @@ class MCP23017GPIOCover(CoverDevice):
         """
         Stop the opening and closing of the cover.
         """
-        self._up_switch.turn_off()
+        # up_pin = dict(self._up_pin[0])
+        # down_pin = dict(self._down_pin[0])
+
         set_pin_output_state(
             True if self._down_pin.get(CONF_INVERT_LOGIC) else False,
             self._down_pin.get(CONF_ADDRESS), 
-            self._down_pin.get(PORT), 
-            self._down_pin.get(PIN) 
+            self._down_pin.get(CONF_PORT), 
+            self._down_pin.get(CONF_INDEX) 
         )
         set_pin_output_state(
             True if self._up_pin.get(CONF_INVERT_LOGIC) else False,
             self._up_pin.get(CONF_ADDRESS), 
-            self._up_pin.get(PORT), 
-            self._up_pin.get(PIN) 
+            self._up_pin.get(CONF_PORT), 
+            self._up_pin.get(CONF_INDEX) 
         )
 
     def open_cover_tilt(self, **kwargs):
@@ -194,3 +227,9 @@ class MCP23017GPIOCover(CoverDevice):
         Stop the opening or closing of the tilt of the cover.
         """
         self.stop_cover()
+
+    def _determine_state(self, pin_state, invert_logic):
+        if pin_state and not invert_logic or not pin_state and invert_logic:
+            return True
+        else:
+            return False
